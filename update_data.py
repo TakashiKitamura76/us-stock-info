@@ -66,7 +66,13 @@ def get_sp500_symbols() -> List[Dict[str, str]]:
     index.  It contains the most up‑to‑date membership because Wikipedia is
     community‑maintained and regularly updated when companies enter or leave
     the index.  Each entry in the returned list has two keys: `symbol` and
-    `name`.
+    
+        # Fetch S&P 500 constituents from a CSV dataset instead of scraping Wikipedia
+    csv_url = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv"
+    df = pd.read_csv(csv_url)
+    symbols = df[["Symbol", "Security"]].rename(columns={"Symbol": "symbol", "Security": "name"})
+    return symbols.to_dict("records")
+`name`.
     """
     url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
     # Read the first table on the page; it contains the index constituents.

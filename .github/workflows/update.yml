@@ -1,5 +1,6 @@
 name: Update S&P500 Good Earnings Data
 
+
 on:
   schedule:
     - cron: '0 0 * * *'

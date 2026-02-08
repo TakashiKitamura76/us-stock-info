@@ -70,7 +70,14 @@ def get_sp500_symbols() -> List[Dict[str, str]]:
     """
     url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
     # Read the first table on the page; it contains the index constituents.
-    tables = pd.read_html(url)
+    
+        headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; us-stock-info-script/1.0; +https://github.com/TakashiKitamura76/us-stock-info)"
+    }
+    resp = requests.get(url, headers=headers)
+    resp.raise_for_status()
+    tables = pd.read_html(resp.text)
+# tables = pd.read_html(url)
     sp500_table = tables[0]
     symbols = sp500_table[["Symbol", "Security"]].rename(
         columns={"Symbol": "symbol", "Security": "name"}

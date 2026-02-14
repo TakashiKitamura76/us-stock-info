@@ -71,9 +71,7 @@ def get_sp500_symbols() -> List[Dict[str, str]]:
     csv_url = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv"
     df = pd.read_csv(csv_url)
     symbols = df[["Symbol", "Security"]].rename(columns={"Symbol": "symbol", "Security": "name"})
-    return symbols.to_dict("records")
-`name`.
-    """
+    return symbolsto_dict("records")
     url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
     # Read the first table on the page; it contains the index constituents.
     

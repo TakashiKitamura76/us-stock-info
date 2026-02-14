@@ -1,60 +1,39 @@
 """
 update_data.py
-----------------
+-------------------
 
-This script fetches the latest stock price and recent earnings surprise data
-for all constituents of the S&P 500 and updates the site's main HTML file.
-The goal is to identify companies that satisfy Hirose Takao’s “good earnings”
-criteria – EPS, revenue and guidance all beating market expectations – and
-display those companies in the table on the website.
+This script fetches the latest stock price and earnings surprise data for all
+constituents of the S&P 500 index and generates a refreshed HTML page for the
+GitHub Pages site.  It is designed to run within a GitHub Actions workflow.
 
-To keep the script simple and avoid relying on rate‑limited, unauthenticated
-data sources, it uses the Finnhub API for both quotes and earnings
-surprises.  Finnhub is a RESTful API that returns JSON‑encoded responses and
-requires an API token for all requests【421114312369163†L139-L154】.  You must
-provide a valid API key via the environment variable `FINNHUB_API_KEY`.
+Key steps:
 
-The script performs the following steps:
+1. **Load S&P 500 constituents**:  Instead of scraping Wikipedia, which often
+   blocks automated requests, the script reads a published CSV dataset of the
+   index constituents from GitHub.  Each row includes the ticker symbol and
+   company name.
 
-1.  **Load S&P 500 constituents**:  Pulls the list of ticker symbols and
-    company names from the Wikipedia page for the S&P 500 index using
-    `pandas.read_html`.  This keeps the list current without maintaining a
-    local copy.
-2.  **Fetch quote and earnings data**:  For each symbol, it requests the
-    latest quote (`/quote`) and the most recent earnings surprise record
-    (`/stock/earnings`) from Finnhub.  A company is considered to have a
-    "good earnings" if the actual EPS and revenue both exceed the analysts’
-    estimates.  Finnhub’s earnings endpoint returns a list of objects
-    containing `actual`, `estimate` and `revenueActual`, `revenueEstimate`.
-3.  **Filter for good earnings**:  Only companies meeting the criteria are
-    retained.  This significantly reduces the size of the HTML table and
-    makes it easier for investors to focus on strong performers.
-4.  **Generate HTML**:  The updated data are used to build a new `index.html`
-    file.  The design closely follows the hand‑crafted, stylish version of
-    the site that exists in the repository – including a gradient header,
-    crisp typography and colour‑coded evaluation results – but populates the
-    table dynamically from the retrieved data.
+2. **Fetch quote and earnings data**:  Using the Finnhub API, the script
+   requests the latest quote (`/quote`) and the most recent earnings surprise
+   record (`/stock/earnings`) for each symbol.  A company is considered to have
+   a "good earnings" result when both its actual EPS and actual revenue exceed
+   the market estimates.
 
-The script is meant to be run automatically via a scheduled GitHub Action.
-If run manually on your local machine you can test the logic and preview the
-generated HTML before committing it to the repository.
+3. **Filter and build HTML**:  Only companies meeting the above criteria are
+   retained.  The output HTML uses the same styling as the hand-crafted site
+   and includes explanatory sections along with a table of the filtered
+   companies.
 
-Usage:
-
-    FINNHUB_API_KEY=<your api key> python update_data.py
-
-Note:  The script assumes it is executed from the repository root and
-writes the generated HTML into the `site` directory as `index.html`.
+Set the environment variable `FINNHUB_API_KEY` before running this script or
+within the GitHub Actions workflow.
 """
 
-import json
 import os
 from datetime import datetime
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 import pandas as pd
 import requests
-
 
 API_BASE = "https://finnhub.io/api/v1"
 
@@ -62,40 +41,32 @@ API_BASE = "https://finnhub.io/api/v1"
 def get_sp500_symbols() -> List[Dict[str, str]]:
     """Return a list of dicts with S&P 500 ticker symbols and company names.
 
-    The list of constituents is scraped from the Wikipedia page for the S&P 500
-    index.  It contains the most up‑to‑date membership because Wikipedia is
-    community‑maintained and regularly updated when companies enter or leave
-    the index.  Each entry in the returned list has two keys: `symbol` and
-    
-        # Fetch S&P 500 constituents from a CSV dataset instead of scraping Wikipedia
-    csv_url = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv"
-    df = pd.read_csv(csv_url)
-    symbols = df[["Symbol", "Security"]].rename(columns={"Symbol": "symbol", "Security": "name"})
-        return symbols.to_dict("records")
-    return symbolsto_dict("records")
-    url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-    # Read the first table on the page; it contains the index constituents.
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; us-stock-info-script/1.0; +https://github.com/TakashiKitamura76/us-stock-info)"
-}
-    resp = requests.get(url, headers=headers)
-    resp.raise_for_status()
-    tables = pd.read_html(resp.text)
-# tables = pd.read_html(url)
-    sp500_table = tables[0]
-    symbols = sp500_table[["Symbol", "Security"]].rename(
+    The constituent list is read from a CSV hosted on GitHub.  Using this CSV
+    avoids hitting Wikipedia's HTML pages, which may rate‑limit or block
+    automated scrapers.  Each entry in the returned list contains two keys:
+    `symbol` (ticker) and `name` (company name).
+    """
+    csv_url = (
+        "https://raw.githubusercontent.com/datasets/"
+        "s-and-p-500-companies/main/data/constituents.csv"
+    )
+    try:
+        df = pd.read_csv(csv_url)
+    except Exception as e:
+        print(f"Error fetching CSV from {csv_url}: {e}")
+        return []
+    symbols = df[["Symbol", "Security"]].rename(
         columns={"Symbol": "symbol", "Security": "name"}
     )
     return symbols.to_dict("records")
 
 
-def fetch_quote(session: requests.Session, symbol: str, token: str) -> float:
+def fetch_quote(session: requests.Session, symbol: str, token: str) -> Optional[float]:
     """Fetch the latest stock price for a given ticker from Finnhub.
 
-    Finnhub’s `/quote` endpoint returns fields including the current price
-    (`c`), the previous close (`pc`) and others.  This function returns
-    the current price as a float.  If the request fails, it returns `None`.
+    Finnhub’s `/quote` endpoint returns fields including the current price (`c`).
+    This function returns the current price as a float.  If the request fails,
+    it returns `None`.
     """
     url = f"{API_BASE}/quote"
     params = {"symbol": symbol, "token": token}
@@ -108,14 +79,16 @@ def fetch_quote(session: requests.Session, symbol: str, token: str) -> float:
         return None
 
 
-def fetch_last_earnings(session: requests.Session, symbol: str, token: str) -> Dict[str, float]:
+def fetch_last_earnings(
+    session: requests.Session, symbol: str, token: str
+) -> Optional[Dict[str, float]]:
     """Return the most recent earnings surprise for a symbol.
 
-    The Finnhub `/stock/earnings` endpoint returns a list of earnings
-    surprises with fields such as `actual`, `estimate`, `revenueActual` and
-    `revenueEstimate`.  This function returns the first record in the list
-    (assumed to be the most recent quarter) with those four fields converted
-    to floats.  If the response is empty or invalid, `None` is returned.
+    The Finnhub `/stock/earnings` endpoint returns a list of earnings surprises
+    with fields such as `actual`, `estimate`, `revenueActual` and `revenueEstimate`.
+    This function returns the first record (assumed to be the most recent
+    quarter) with those four fields converted to floats.  If the response is
+    empty or invalid, it returns `None`.
     """
     url = f"{API_BASE}/stock/earnings"
     params = {"symbol": symbol, "token": token}
@@ -137,11 +110,11 @@ def fetch_last_earnings(session: requests.Session, symbol: str, token: str) -> D
 
 
 def is_good_earnings(record: Dict[str, float]) -> bool:
-    """Determine whether a company meets the "good earnings" criteria.
+    """Determine whether a company meets the 'good earnings' criteria.
 
-    A company is considered to have a good earnings result when its actual
-    EPS and revenue both exceed the market estimates.  Guidance is not
-    available via this API, so only the first two conditions are evaluated.
+    A company is considered to have a good earnings result when its actual EPS
+    and actual revenue both exceed the market estimates.  Guidance is not
+    available via this API, so the comparison is limited to EPS and revenue.
     """
     return (
         record["actual_eps"] > record["estimate_eps"]
@@ -152,11 +125,10 @@ def is_good_earnings(record: Dict[str, float]) -> bool:
 def build_html(entries: List[Dict[str, any]]) -> str:
     """Construct an HTML string for the main page from a list of entries.
 
-    Each entry should have `name`, `symbol`, `price` and `good` fields.  This
-    function produces an HTML page mirroring the stylish design previously
-    created, and populates the table rows using the provided entries.
+    Each entry should have `name`, `symbol`, `price` and `good` fields.
+    This function produces an HTML page mirroring the stylish design and
+    populates the table rows using the provided entries.
     """
-    # HTML header and CSS styling
     html_parts = [
         "<!DOCTYPE html>",
         "<html lang=\"ja\">",
@@ -218,36 +190,38 @@ def build_html(entries: List[Dict[str, any]]) -> str:
         "            <th>評価結果</th>",
         "          </tr>",
         "        </thead>",
-        "        <tbody>"
+        "        <tbody>",
     ]
 
+    # Append table rows based on entries
     for entry in entries:
-        # Determine class for the evaluation result
         cls = "good" if entry["good"] else "no"
         result_text = "良い決算" if entry["good"] else "該当なし"
         html_parts.append(
             f"          <tr><td>{entry['name']}</td><td>{entry['symbol']}</td><td>{entry['price']:.2f}</td><td class=\"{cls}\">{result_text}</td></tr>"
         )
 
+    # Close out the table and add footnotes
     html_parts.extend([
         "        </tbody>",
         "      </table>",
-        "      <p class=\"note\">表に表示されているデータは Finnhub API を使用して生成されています。API は RESTful な JSON 形式でレスポンスを返し、すべての GET リクエストで token パラメータが必要です【421114312369163†L139-L154】。API キーの設定方法についてはリポジトリの README を参照してください。</p>",
+        "      <p class=\"note\">表に表示されているデータは Finnhub API を使用して生成されています。API は RESTful な JSON 形式でレスポンスを返し、すべての GET リクエストで token パラメータが必要です。API キーの設定方法についてはリポジトリの README を参照してください。</p>",
         "    </section>",
         "    <section id=\"footnotes\">",
-        "      <p id=\"cite-hirosekessan\" class=\"note\"><strong>[1]</strong> 良い決算の条件は EPS、売上高、会社ガイダンスが市場予想をすべて上回ること【643053757984928†L296-L304】。</p>",
+        "      <p id=\"cite-hirosekessan\" class=\"note\"><strong>[1]</strong> 良い決算の条件は EPS、売上高、会社ガイダンスが市場予想をすべて上回ることにあります。</p>",
         "    </section>",
         "  </main>",
         "  <footer>",
         "    <p>&copy; {year} AI広瀬の米国株決算分析. All rights reserved.</p>",
         "  </footer>",
         "</body>",
-        "</html>"
+        "</html>",
     ])
     return "\n".join(html_parts).format(year=datetime.now().year)
 
 
-def main():
+def main() -> None:
+    """Entry point for the update script."""
     token = os.getenv("FINNHUB_API_KEY")
     if not token:
         raise RuntimeError(
@@ -255,28 +229,31 @@ def main():
         )
 
     session = requests.Session()
+    sp500_list = get_sp500_symbols()
+    if not sp500_list:
+        raise RuntimeError("Could not retrieve S&P 500 symbols; aborting.")
 
-    sp500 = get_sp500_symbols()
-    entries = []
-    for item in sp500:
+    entries: List[Dict[str, any]] = []
+    for item in sp500_list:
         symbol = item["symbol"]
         name = item["name"]
-        quote = fetch_quote(session, symbol, token)
+        price = fetch_quote(session, symbol, token)
         earnings = fetch_last_earnings(session, symbol, token)
-        if quote is None or earnings is None:
+        if price is None or earnings is None:
             continue
         good = is_good_earnings(earnings)
         if good:
-            entries.append({"name": name, "symbol": symbol, "price": quote, "good": good})
+            entries.append({"name": name, "symbol": symbol, "price": price, "good": good})
 
-    # Sort entries alphabetically for consistency
+    # Sort entries alphabetically by symbol for consistency
     entries.sort(key=lambda e: e["symbol"])
 
     html = build_html(entries)
-    # Write to index.html in the site directory
+    # Write the generated HTML to index.html in the same directory as this script
     output_path = os.path.join(os.path.dirname(__file__), "index.html")
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(html)
+
     print(f"Generated HTML for {len(entries)} companies with good earnings.")
 
 
